@@ -22,6 +22,7 @@ type looperConfig struct {
 	agent      adk.Agent
 	streaming  bool
 	checkStore adk.CheckPointStore
+	llm        model.BaseChatModel
 }
 
 type looper struct {
@@ -40,6 +41,7 @@ func NewLooper(ctx context.Context, cfg *looperConfig) (*looper, error) {
 	})
 	o := &looper{
 		agent:        cfg.agent,
+		llm:          cfg.llm,
 		runner:       runner,
 		checkPointMu: sync.Mutex{},
 		checkPoints:  make(map[string]*types.InterruptCheckPoint),
@@ -68,6 +70,9 @@ func (o *looper) Run(ctx context.Context, state *State) error {
 			return err
 		}
 		if errors.Is(err, adk.ErrExceedMaxIterations) {
+			if o.llm == nil {
+				return err
+			}
 			maxPropmt := fmt.Sprintf("[SYSTEM NOTICE: You have reached the maximum iteration limit. Please provide a final response to the user based on the previous tool results. Do not make any further tool calls.]")
 			messages := append(state.FullMessages(), schema.UserMessage(maxPropmt))
 			resultMsg, lerr := o.llm.Generate(ctx, messages)

@@ -111,6 +111,7 @@ func buildAgent(ctx context.Context, ag adk.Agent, cfg *AgentConfig) (*Agent, er
 		agent:      ag,
 		streaming:  cfg.Streaming,
 		checkStore: cfg.CheckStore,
+		llm:        cfg.LLM,
 	})
 	if err != nil {
 		return nil, err
