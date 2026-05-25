@@ -107,6 +107,12 @@ func (o *looper) runLoop(state *State) error {
 	opts = append(opts, adk.WithSessionValues(sessionValue))
 
 	messages := append(state.HistoryMessage, state.Input)
+
+	cancelOpt, cancelFunc := adk.WithCancel()
+
+	state.agentCancel = cancelFunc
+
+	opts = append(opts, cancelOpt)
 	events := o.runner.Run(state.ctx, messages, opts...)
 	return o.processEvents(state, events)
 }
@@ -157,6 +163,9 @@ func (o *looper) processEvents(state *State, events *adk.AsyncIterator[*adk.Agen
 			break
 		}
 		if event.Err != nil {
+			if cancelErr, ok2 := errors.AsType[*adk.CancelError](event.Err); ok2 {
+				slog.Warn("Agent 被取消", "mode", cancelErr.Info.Mode, "escalated", cancelErr.Info.Escalated)
+			}
 			return event.Err
 		}
 

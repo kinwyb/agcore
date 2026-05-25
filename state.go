@@ -63,15 +63,16 @@ func defaultEventCallback(event *Event) {
 
 // State 请求的状态信息
 type State struct {
-	ctx            context.Context    //上下文
-	cancel         context.CancelFunc //取消函数
-	SessionID      string             `json:"session_id"`      // 会话记录ID
-	ReqID          string             `json:"req_id"`          // 输入消息ID
-	Input          adk.Message        `json:"input"`           // 输入消息
-	HistoryMessage []adk.Message      `json:"history_message"` // 历史消息
-	NewMessage     []adk.Message      `json:"new_message"`     // 新消息
-	Session        map[string]any     `json:"session"`         // session值
-	EventHandler   EventCallback      `json:"-"`               // 消息事件处理
+	ctx            context.Context     //上下文
+	cancel         context.CancelFunc  //取消函数
+	agentCancel    adk.AgentCancelFunc //agent取消
+	SessionID      string              `json:"session_id"`      // 会话记录ID
+	ReqID          string              `json:"req_id"`          // 输入消息ID
+	Input          adk.Message         `json:"input"`           // 输入消息
+	HistoryMessage []adk.Message       `json:"history_message"` // 历史消息
+	NewMessage     []adk.Message       `json:"new_message"`     // 新消息
+	Session        map[string]any      `json:"session"`         // session值
+	EventHandler   EventCallback       `json:"-"`               // 消息事件处理
 }
 
 // FullMessages 获取state完整消息，包含：历史消息，输入消息，新消息
@@ -79,6 +80,20 @@ func (s *State) FullMessages() []adk.Message {
 	message := append(s.HistoryMessage, s.Input)
 	message = append(message, s.NewMessage...)
 	return message
+}
+
+// AnswerMessages 获取state最新问题的数据，包含：输入消息，新消息
+func (s *State) AnswerMessages() []adk.Message {
+	message := append([]adk.Message{s.Input}, s.NewMessage...)
+	return message
+}
+
+// LastAnswer 获取state最后的回答,大模型返回的最后消息
+func (s *State) LastAnswer() adk.Message {
+	if len(s.NewMessage) == 0 {
+		return nil
+	}
+	return s.NewMessage[len(s.NewMessage)-1]
 }
 
 // NewState 创建一个消息状态

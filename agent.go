@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kinwyb/agcore/tools"
 	"github.com/kinwyb/agcore/types"
@@ -92,15 +93,17 @@ func NewAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 }
 
 // agentMiddlewares agent的默认中间件
-func agentMiddlewares(ctx context.Context, cfg *AgentConfig) []adk.ChatModelAgentMiddleware {
+func agentMiddlewares(ctx context.Context, cfg *AgentConfig, fileMW bool) []adk.ChatModelAgentMiddleware {
 	mds := append([]adk.ChatModelAgentMiddleware{
 		tools.NewToolApproveMiddleware(cfg.ToolReg),
 		&safeToolMiddleware{},
 		//NewInstructionLoggerMiddleware(cfg.Workspace, cfg.Name, cfg.SessionManager)
 	}, cfg.Middlewares...)
-	toolAndShellMiddleware, _ := buildBuiltinAgentMiddlewares(ctx)
-	if len(toolAndShellMiddleware) > 0 {
-		mds = append(toolAndShellMiddleware, mds...)
+	if fileMW {
+		toolAndShellMiddleware, _ := buildBuiltinAgentMiddlewares(ctx)
+		if len(toolAndShellMiddleware) > 0 {
+			mds = append(toolAndShellMiddleware, mds...)
+		}
 	}
 	return mds
 }
@@ -134,7 +137,7 @@ func newChatModelAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 		Instruction:      cfg.Instruction,
 		Model:            cfg.LLM,
 		MaxIterations:    cfg.MaxIteration,
-		Handlers:         agentMiddlewares(ctx, cfg),
+		Handlers:         agentMiddlewares(ctx, cfg, true),
 		ModelRetryConfig: buildModelRetryConfig(),
 	}
 
@@ -186,7 +189,7 @@ func newDeepAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 		Shell:                  backend,
 		WithoutWriteTodos:      false,
 		WithoutGeneralSubAgent: false,
-		Handlers:               agentMiddlewares(ctx, cfg),
+		Handlers:               agentMiddlewares(ctx, cfg, false),
 		ModelRetryConfig:       buildModelRetryConfig(),
 	}
 
@@ -307,7 +310,7 @@ func newSupervisorAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 		Instruction:      systemPrompt,
 		Model:            cfg.LLM,
 		MaxIterations:    cfg.MaxIteration,
-		Handlers:         agentMiddlewares(ctx, cfg),
+		Handlers:         agentMiddlewares(ctx, cfg, true),
 		ModelRetryConfig: buildModelRetryConfig(),
 	}
 
@@ -430,7 +433,7 @@ Your mission: complete user requests using all available means, minimizing human
 - If you have tools available for a task, use them. No permission needed for safe operations.
 - **NEVER HALLUCINATE SEARCH RESULTS**: When presenting search results, ONLY use the exact data returned by the tool. If no results were found, clearly state that no results were found.
 - When a tool fails: analyze the error, try an alternative approach WITHOUT asking the user unless absolutely necessary.
-
+- You have ZERO knowledge of the current time; for any time-related concepts (e.g., "today", "now", date calculations), NEVER guess or rely on chat history—you MUST immediately call the 'get_current_time' tool.
 
 ### Work Information
 
@@ -538,6 +541,25 @@ func (a *Agent) Stop() error {
 		a.cancel()
 	}
 	return nil
+}
+
+// Cancel 取消一个session执行
+func (a *Agent) Cancel(sessionID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if state, ok := a.sessionMap[sessionID]; ok {
+		if state.agentCancel != nil { //取消agent执行
+			handle, _ := state.agentCancel(
+				adk.WithAgentCancelMode(adk.CancelAfterChatModel|adk.CancelAfterToolCalls),
+				adk.WithAgentCancelTimeout(5*time.Second),
+			)
+			_ = handle.Wait()
+		}
+		if state.cancel != nil {
+			state.cancel()
+		}
+		delete(a.sessionMap, sessionID)
+	}
 }
 
 // safeToolMiddleware  将Tool错误转换为字符串，让模型能够理解并处理
