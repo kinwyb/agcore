@@ -18,13 +18,12 @@ const MessageExtraTimestampKey = "timestamp"
 type EventType string
 
 const (
-	EventMessageStart       EventType = "message_start"
-	EventMessageUpdate      EventType = "message_update"
-	EventMessageEnd         EventType = "message_end"
-	EventToolStart          EventType = "tool_start"
-	EventToolEnd            EventType = "tool_end"
-	EventInterrupt          EventType = "interrupt"
-	EventUnregisterCallback EventType = "unregister_callback"
+	EventMessageStart  EventType = "message_start"
+	EventMessageUpdate EventType = "message_update"
+	EventMessageEnd    EventType = "message_end"
+	EventToolStart     EventType = "tool_start"
+	EventToolEnd       EventType = "tool_end"
+	EventInterrupt     EventType = "interrupt"
 )
 
 type Event struct {
@@ -68,7 +67,7 @@ type State struct {
 	agentCancel    adk.AgentCancelFunc //agent取消
 	SessionID      string              `json:"session_id"`      // 会话记录ID
 	ReqID          string              `json:"req_id"`          // 输入消息ID
-	Input          adk.Message         `json:"input"`           // 输入消息
+	Input          []adk.Message       `json:"input"`           // 输入消息
 	HistoryMessage []adk.Message       `json:"history_message"` // 历史消息
 	NewMessage     []adk.Message       `json:"new_message"`     // 新消息
 	Session        map[string]any      `json:"session"`         // session值
@@ -77,14 +76,14 @@ type State struct {
 
 // FullMessages 获取state完整消息，包含：历史消息，输入消息，新消息
 func (s *State) FullMessages() []adk.Message {
-	message := append(s.HistoryMessage, s.Input)
+	message := append(s.HistoryMessage, s.Input...)
 	message = append(message, s.NewMessage...)
 	return message
 }
 
 // AnswerMessages 获取state最新问题的数据，包含：输入消息，新消息
 func (s *State) AnswerMessages() []adk.Message {
-	message := append([]adk.Message{s.Input}, s.NewMessage...)
+	message := append(s.Input, s.NewMessage...)
 	return message
 }
 
@@ -96,8 +95,35 @@ func (s *State) LastAnswer() adk.Message {
 	return s.NewMessage[len(s.NewMessage)-1]
 }
 
+// LastInput 获取state中最后一条输入的消息
+func (s *State) LastInput() adk.Message {
+	if len(s.Input) == 0 {
+		return nil
+	}
+	return s.Input[len(s.Input)-1]
+}
+
 // NewState 创建一个消息状态
 func NewState(sessionID string, reqID string, input adk.Message, history []adk.Message) *State {
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	}
+	if reqID == "" {
+		reqID = uuid.New().String()
+	}
+	return &State{
+		SessionID:      sessionID,
+		ReqID:          reqID,
+		Input:          []adk.Message{input},
+		HistoryMessage: history,
+		NewMessage:     nil,
+		Session:        make(map[string]any),
+		EventHandler:   nil,
+	}
+}
+
+// NewStateMuiltInput 创建一个消息状态
+func NewStateMuiltInput(sessionID string, reqID string, input []adk.Message, history []adk.Message) *State {
 	if sessionID == "" {
 		sessionID = uuid.NewString()
 	}

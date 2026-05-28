@@ -106,7 +106,7 @@ func (o *looper) runLoop(state *State) error {
 
 	opts = append(opts, adk.WithSessionValues(sessionValue))
 
-	messages := append(state.HistoryMessage, state.Input)
+	messages := append(state.HistoryMessage, state.Input...)
 
 	cancelOpt, cancelFunc := adk.WithCancel()
 
@@ -129,16 +129,22 @@ func (o *looper) runResume(state *State) error {
 	delete(o.checkPoints, state.SessionID)
 	o.checkPointMu.Unlock()
 
+	input := state.LastInput()
+
+	if input == nil {
+		return errors.New("agent loop failed: input nil")
+	}
+
 	// 校验参数类型
 	var param any
 	if cp.InterruptInfo != nil {
-		param = cp.InterruptInfo.ResumeParam(state.Input.Content)
+		param = cp.InterruptInfo.ResumeParam(input.Content)
 	}
 	state.NewMessage = cp.Messages
 
 	slog.Debug("Resuming from interrupt",
 		"interruptID", cp.InterruptID,
-		"resumeInput", state.Input.Content,
+		"resumeInput", input.Content,
 		"resumeParam", param)
 
 	// 使用ResumeWithParams恢复执行
