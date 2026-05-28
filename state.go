@@ -111,6 +111,13 @@ func NewState(sessionID string, reqID string, input adk.Message, history []adk.M
 	if reqID == "" {
 		reqID = uuid.New().String()
 	}
+	if input != nil {
+		if input.Extra == nil {
+			input.Extra = make(map[string]any)
+		}
+		input.Extra[MessageExtraReqIDKey] = reqID
+		input.Extra[MessageExtraTimestampKey] = time.Now().Format(time.RFC3339)
+	}
 	return &State{
 		SessionID:      sessionID,
 		ReqID:          reqID,

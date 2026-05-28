@@ -97,7 +97,6 @@ func agentMiddlewares(ctx context.Context, cfg *AgentConfig, fileMW bool) []adk.
 	mds := append([]adk.ChatModelAgentMiddleware{
 		tools.NewToolApproveMiddleware(cfg.ToolReg),
 		&safeToolMiddleware{},
-		//NewInstructionLoggerMiddleware(cfg.Workspace, cfg.Name, cfg.SessionManager)
 	}, cfg.Middlewares...)
 	if fileMW {
 		toolAndShellMiddleware, _ := buildBuiltinAgentMiddlewares(ctx)
@@ -177,7 +176,12 @@ func newDeepAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 			subAgents = append(subAgents, subAg.loop.agent)
 		}
 	}
-
+	// Instruction 占位符替换
+	middlewares := make([]adk.ChatModelAgentMiddleware, 0, len(cfg.Middlewares)+1)
+	middlewares = append(middlewares, newInstructionReplacerMiddleware())
+	if len(cfg.Middlewares) > 0 {
+		middlewares = append(middlewares, cfg.Middlewares...)
+	}
 	agentConfig := &deep.Config{
 		Name:                   cfg.Name,
 		Description:            description,
@@ -189,7 +193,7 @@ func newDeepAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 		Shell:                  backend,
 		WithoutWriteTodos:      false,
 		WithoutGeneralSubAgent: false,
-		Handlers:               agentMiddlewares(ctx, cfg, false),
+		Handlers:               middlewares,
 		ModelRetryConfig:       buildModelRetryConfig(),
 	}
 
@@ -562,6 +566,21 @@ func (a *Agent) Cancel(sessionID string) {
 	}
 }
 
+// Name agent名称
+func (a *Agent) Name() string {
+	return a.cfg.Name
+}
+
+// Instruction agent提示词
+func (a *Agent) Instruction() string {
+	return a.cfg.Instruction
+}
+
+// IsStreaming 是否流式输出
+func (a *Agent) IsStreaming() bool {
+	return a.cfg.Streaming
+}
+
 // safeToolMiddleware  将Tool错误转换为字符串，让模型能够理解并处理
 type safeToolMiddleware struct {
 	*adk.BaseChatModelAgentMiddleware
@@ -625,4 +644,39 @@ func (m *safeToolMiddleware) safeWrapReader(sr *schema.StreamReader[string]) *sc
 		}
 	}()
 	return r
+}
+
+// instructionReplacerMiddleware 替换 Instruction 中的 SessionValue 占位符
+type instructionReplacerMiddleware struct {
+	*adk.BaseChatModelAgentMiddleware
+}
+
+// NewInstructionReplacerMiddleware 创建占位符替换中间件
+func newInstructionReplacerMiddleware() adk.ChatModelAgentMiddleware {
+	return &instructionReplacerMiddleware{}
+}
+
+func (m *instructionReplacerMiddleware) BeforeAgent(
+	ctx context.Context,
+	runCtx *adk.ChatModelAgentContext,
+) (context.Context, *adk.ChatModelAgentContext, error) {
+	if runCtx.Instruction == "" {
+		return ctx, runCtx, nil
+	}
+
+	sessionValues := adk.GetSessionValues(ctx)
+	if len(sessionValues) == 0 {
+		return ctx, runCtx, nil
+	}
+
+	instruction := runCtx.Instruction
+	for key, value := range sessionValues {
+		placeholder := "{" + key + "}"
+		if strings.Contains(instruction, placeholder) {
+			instruction = strings.ReplaceAll(instruction, placeholder, fmt.Sprintf("%v", value))
+		}
+	}
+	runCtx.Instruction = instruction
+
+	return ctx, runCtx, nil
 }
