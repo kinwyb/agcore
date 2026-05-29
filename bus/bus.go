@@ -177,14 +177,8 @@ func (b *MessageBus) PublishInbound(ctx context.Context, msg *InboundMessage) er
 	return b.inbound.Push(ctx, msg)
 }
 
-// ConsumeInbound 消费入站消息
-func (b *MessageBus) ConsumeInbound() (*InboundSubscription, error) {
-	return b.ConsumeInboundFiltered(nil)
-}
-
-// ConsumeInboundFiltered 消费入站消息，按 channels 过滤
-// channels 为空切片时消费所有消息，否则只消费指定 channel 的消息
-func (b *MessageBus) ConsumeInboundFiltered(channels []string) (*InboundSubscription, error) {
+// SubscribeInbound 消费入站消息
+func (b *MessageBus) SubscribeInbound(channel ...string) (*InboundSubscription, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -193,7 +187,7 @@ func (b *MessageBus) ConsumeInboundFiltered(channels []string) (*InboundSubscrip
 	}
 
 	sub := newInboundSubscription(100, b.inbound)
-	sub.channels = channels
+	sub.channels = channel
 	return sub, nil
 }
 
@@ -216,15 +210,9 @@ func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) 
 	return b.outbound.Push(ctx, msg)
 }
 
-// ConsumeOutbound 消费出站消息
+// SubscribeOutbound 消费出站消息
 // 使用订阅机制，确保消息能够被正确接收
-func (b *MessageBus) ConsumeOutbound() (*OutboundSubscription, error) {
-	return b.ConsumeOutboundFiltered(nil)
-}
-
-// ConsumeOutboundFiltered 消费出站消息，按 channels 过滤
-// channels 为空切片时消费所有消息，否则只消费指定 channel 的消息
-func (b *MessageBus) ConsumeOutboundFiltered(channels []string) (*OutboundSubscription, error) {
+func (b *MessageBus) SubscribeOutbound(channel ...string) (*OutboundSubscription, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -233,7 +221,7 @@ func (b *MessageBus) ConsumeOutboundFiltered(channels []string) (*OutboundSubscr
 	}
 
 	sub := newOutboundSubscription(100, b.outbound)
-	sub.channels = channels
+	sub.channels = channel
 	return sub, nil
 }
 
@@ -330,13 +318,7 @@ func (b *MessageBus) PublishEvent(ctx context.Context, event *Event) error {
 }
 
 // SubscribeEvent 订阅聊天事件
-func (b *MessageBus) SubscribeEvent() (*EventSubscription, error) {
-	return b.SubscribeEventFiltered(nil)
-}
-
-// SubscribeEventFiltered 订阅聊天事件，按 channels 过滤
-// channels 为空切片时订阅所有事件，否则只订阅指定 channel 的事件
-func (b *MessageBus) SubscribeEventFiltered(channels []string) (*EventSubscription, error) {
+func (b *MessageBus) SubscribeEvent(channel ...string) (*EventSubscription, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -345,7 +327,7 @@ func (b *MessageBus) SubscribeEventFiltered(channels []string) (*EventSubscripti
 	}
 
 	sub := newEventSubscription(100, b.chatEvents)
-	sub.channels = channels
+	sub.channels = channel
 	return sub, nil
 }
 
@@ -369,10 +351,14 @@ func (b *MessageBus) PublishLog(ctx context.Context, event *Log) error {
 }
 
 // SubscribeLogEvent 订阅日志事件
-func (b *MessageBus) SubscribeLogEvent() *LogSubscription {
+func (b *MessageBus) SubscribeLogEvent() (*LogSubscription, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.closed {
+		return nil, ErrBusClosed
+	}
+
 	sub := newLogSubscription(100, b.logEvents)
-	return sub
+	return sub, nil
 }

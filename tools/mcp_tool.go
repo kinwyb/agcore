@@ -10,6 +10,7 @@ import (
 	mcpp "github.com/cloudwego/eino-ext/components/tool/mcp"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -69,10 +70,17 @@ func (l *MCPLoader) loadToolsFromConfig(ctx context.Context, cfg MCPConfig) ([]t
 		return nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}
 
+	var head map[string]string
+	if cfg.Auth != "" {
+		head = map[string]string{
+			"Authorization": "Bearer " + cfg.Auth,
+		}
+	}
 	// 获取工具
 	mcpTools, err := mcpp.GetTools(ctx, &mcpp.Config{
-		Cli:          cli,
-		ToolNameList: cfg.Tools,
+		Cli:           cli,
+		ToolNameList:  cfg.Tools,
+		CustomHeaders: head,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MCP tools: %w", err)
@@ -117,11 +125,31 @@ func (l *MCPLoader) createClient(ctx context.Context, cfg MCPConfig) (*client.Cl
 		if cfg.URL == "" {
 			return nil, fmt.Errorf("MCP SSE config missing URL")
 		}
-		cli, err = client.NewSSEMCPClient(cfg.URL)
+		var head map[string]string
+		if cfg.Auth != "" {
+			head = map[string]string{
+				"Authorization": "Bearer " + cfg.Auth,
+			}
+		}
+		cli, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(head))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create SSE client: %w", err)
 		}
+	case "http":
+		if cfg.URL == "" {
+			return nil, fmt.Errorf("MCP HTTP config missing URL")
+		}
+		var head map[string]string
+		if cfg.Auth != "" {
+			head = map[string]string{
+				"Authorization": "Bearer " + cfg.Auth,
+			}
+		}
 
+		cli, err = client.NewStreamableHttpClient(cfg.URL, transport.WithHTTPHeaders(head))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create SSE client: %w", err)
+		}
 	case "stdio":
 		if cfg.Command == "" {
 			return nil, fmt.Errorf("MCP stdio config missing command")
@@ -188,6 +216,7 @@ type MCPConfig = struct {
 	Name        string            `json:"name"`
 	Type        string            `json:"type"`
 	URL         string            `json:"url"`
+	Auth        string            `json:"auth"`
 	Command     string            `json:"command"`
 	Args        []string          `json:"args"`
 	Env         map[string]string `json:"env"`
