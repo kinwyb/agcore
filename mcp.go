@@ -12,16 +12,16 @@ import (
 	"github.com/eino-contrib/jsonschema"
 )
 
-// loadMCPTools 加载 MCP 工具到注册表
-func loadMCPTools(ctx context.Context, register *tools.Registry, mcpConfigs []tools.MCPConfig) error {
+// loadMCPTools 加载 MCP 工具到注册表，返回加载器实例
+func loadMCPTools(ctx context.Context, register *tools.Registry, mcpConfigs []tools.MCPConfig) (*tools.MCPLoader, error) {
 	if len(mcpConfigs) == 0 || register == nil {
-		return nil
+		return nil, nil
 	}
 
 	loader := tools.NewMCPLoader()
 	mcpTools, err := loader.LoadTools(ctx, mcpConfigs)
 	if err != nil {
-		return fmt.Errorf("failed to load MCP tools: %w", err)
+		return loader, fmt.Errorf("failed to load MCP tools: %w", err)
 	}
 
 	for _, t := range mcpTools {
@@ -46,7 +46,7 @@ func loadMCPTools(ctx context.Context, register *tools.Registry, mcpConfigs []to
 		}
 	}
 
-	return nil
+	return loader, nil
 }
 
 // schemaToMap 将 jsonschema.Schema 转换为 map[string]any

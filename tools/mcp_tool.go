@@ -16,14 +16,16 @@ import (
 
 // MCPLoader MCP 工具加载器
 type MCPLoader struct {
-	clients map[string]*client.Client // MCP 客户端缓存
-	mu      sync.RWMutex
+	clients      map[string]*client.Client // MCP 客户端缓存 (name -> client)
+	toolToServer map[string]string         // tool name -> server name
+	mu           sync.RWMutex
 }
 
 // NewMCPLoader 创建 MCP 加载器
 func NewMCPLoader() *MCPLoader {
 	return &MCPLoader{
-		clients: make(map[string]*client.Client),
+		clients:      make(map[string]*client.Client),
+		toolToServer: make(map[string]string),
 	}
 }
 
@@ -47,6 +49,14 @@ func (l *MCPLoader) LoadTools(ctx context.Context, configs []MCPConfig) ([]tool.
 		}
 
 		allTools = append(allTools, tools...)
+		l.mu.Lock()
+		for _, t := range tools {
+			info, err := t.Info(ctx)
+			if err == nil && info != nil {
+				l.toolToServer[info.Name] = cfg.Name
+			}
+		}
+		l.mu.Unlock()
 		slog.Info("MCP tools loaded", "name", cfg.Name, "count", len(tools))
 	}
 
@@ -188,6 +198,25 @@ func (l *MCPLoader) createClient(ctx context.Context, cfg MCPConfig) (*client.Cl
 
 	slog.Info("MCP client initialized", "name", cfg.Name, "type", cfg.Type)
 	return cli, nil
+}
+
+// GetClient returns the MCP client for a given server name.
+func (l *MCPLoader) GetClient(serverName string) (client.MCPClient, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	cli, ok := l.clients[serverName]
+	return cli, ok
+}
+
+// GetToolToServerMap returns a copy of the tool name to server name mapping.
+func (l *MCPLoader) GetToolToServerMap() map[string]string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	cp := make(map[string]string, len(l.toolToServer))
+	for k, v := range l.toolToServer {
+		cp[k] = v
+	}
+	return cp
 }
 
 // Close 关闭所有 MCP 客户端

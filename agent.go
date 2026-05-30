@@ -38,6 +38,7 @@ type AgentConfig struct {
 	SubAgents    []*Agent                       // 子agent实例
 	SkillDirs    []string                       // 支持多个SKILL目录
 	MCPConfigs   []tools.MCPConfig              // MCP配置信息
+	MCPLoader    *tools.MCPLoader               // MCP 工具加载器（用于可用性检查）
 }
 
 type Agent struct {
@@ -71,9 +72,11 @@ func NewAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 	}
 
 	// 加载 MCP 工具
-	if err := loadMCPTools(ctx, cfg.ToolReg, cfg.MCPConfigs); err != nil {
+	mcpLoader, err := loadMCPTools(ctx, cfg.ToolReg, cfg.MCPConfigs)
+	if err != nil {
 		slog.Warn("Failed to load MCP tools", "error", err)
 	}
+	cfg.MCPLoader = mcpLoader
 
 	switch cfg.Type {
 	case types.AgentTypeChat:
@@ -94,6 +97,7 @@ func agentMiddlewares(ctx context.Context, cfg *AgentConfig, fileMW bool) []adk.
 	mds := append([]adk.ChatModelAgentMiddleware{
 		tools.NewToolApproveMiddleware(cfg.ToolReg),
 		NewToolValidateMiddleware(),
+		NewMCPAvailMiddleware(cfg.MCPLoader),
 	}, cfg.Middlewares...)
 	if fileMW {
 		toolAndShellMiddleware, _ := buildBuiltinAgentMiddlewares(ctx)
