@@ -87,12 +87,9 @@ func (f *fanoutMessage[T]) Push(ctx context.Context, msg *T) error {
 		return errors.New("fanout message bus closed")
 	}
 	select {
-	case f.msg <- msg:
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	default:
-		slog.Debug("fanout message is full")
+	case f.msg <- msg:
 		return nil
 	}
 }

@@ -34,8 +34,7 @@ func (o *subscription[T]) Consume(ctx context.Context) (*T, bool) {
 	select {
 	case <-ctx.Done():
 		return nil, false
-	default:
-		msg := <-o.Channel
+	case msg := <-o.Channel:
 		return msg, true
 	}
 }
