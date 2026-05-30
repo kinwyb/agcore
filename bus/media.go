@@ -176,7 +176,7 @@ func convertOutputPartToMedia(part schema.MessageOutputPart) Media {
 			URL:      strValOrEmpty(part.Image.URL),
 			Base64:   strValOrEmpty(part.Image.Base64Data),
 			MimeType: part.Image.MIMEType,
-			Metadata: part.Image.Extra,
+			Metadata: part.Extra,
 		}
 	case schema.ChatMessagePartTypeAudioURL:
 		if part.Audio == nil {
@@ -187,7 +187,7 @@ func convertOutputPartToMedia(part schema.MessageOutputPart) Media {
 			URL:      strValOrEmpty(part.Audio.URL),
 			Base64:   strValOrEmpty(part.Audio.Base64Data),
 			MimeType: part.Audio.MIMEType,
-			Metadata: part.Audio.Extra,
+			Metadata: part.Extra,
 		}
 	case schema.ChatMessagePartTypeVideoURL:
 		if part.Video == nil {
@@ -198,7 +198,7 @@ func convertOutputPartToMedia(part schema.MessageOutputPart) Media {
 			URL:      strValOrEmpty(part.Video.URL),
 			Base64:   strValOrEmpty(part.Video.Base64Data),
 			MimeType: part.Video.MIMEType,
-			Metadata: part.Video.Extra,
+			Metadata: part.Extra,
 		}
 	default:
 		return Media{}
