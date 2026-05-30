@@ -176,13 +176,32 @@ func newInvokeableTool(tool types.Tool) (tool.InvokableTool, error) {
 }
 
 func (i invokeableTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
-	param := jsonschema.Reflect(i.tool.Parameters())
+	param, _ := i.mapToSchema(i.tool.Parameters())
 	toolInfo := &schema.ToolInfo{
 		Name:        i.tool.Name(),
 		Desc:        i.tool.Description(),
 		ParamsOneOf: schema.NewParamsOneOfByJSONSchema(param),
 	}
 	return toolInfo, nil
+}
+
+func (i invokeableTool) Parameters() map[string]any {
+	return i.tool.Parameters()
+}
+
+func (i invokeableTool) mapToSchema(data map[string]any) (*jsonschema.Schema, error) {
+	if data == nil {
+		return nil, errors.New("nil map")
+	}
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal map failed: %w", err)
+	}
+	var js jsonschema.Schema
+	if err := json.Unmarshal(jsonBytes, &js); err != nil {
+		return nil, fmt.Errorf("unmarshal to jsonschema.Schema failed: %w", err)
+	}
+	return &js, nil
 }
 
 func (i invokeableTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {

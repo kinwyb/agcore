@@ -16,6 +16,11 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
+type toolParameters interface {
+	// Parameters 要求这是一个json schema结构
+	Parameters() map[string]any
+}
+
 // toolValidateMiddleware validates tool call arguments against the tool's parameter
 // schema before execution. Invalid arguments are rejected with a descriptive error
 // returned to the model for self-correction.
@@ -132,33 +137,46 @@ func (m *toolValidateMiddleware) getValidator(ctx context.Context, toolName stri
 		return nil
 	}
 
-	// Get tool info
-	info, err := t.Info(ctx)
-	if err != nil {
-		return nil
-	}
-	if info.ParamsOneOf == nil {
-		// No parameters defined, no validation needed
-		m.schemas.Store(toolName, noValidator)
-		return nil
-	}
+	var schemaMap = map[string]any{}
 
-	// Convert to JSON Schema
-	js, err := info.ParamsOneOf.ToJSONSchema()
-	if err != nil || js == nil {
-		m.schemas.Store(toolName, noValidator)
-		return nil
+	if tP, ok := t.(toolParameters); ok {
+		schemaMap = tP.Parameters()
+	} else {
+		// Get tool info
+		info, err := t.Info(ctx)
+		if err != nil {
+			return nil
+		}
+		if info.ParamsOneOf == nil {
+			// No parameters defined, no validation needed
+			m.schemas.Store(toolName, noValidator)
+			return nil
+		}
+
+		// Convert to JSON Schema
+		js, err := info.ParamsOneOf.ToJSONSchema()
+		if err != nil || js == nil {
+			m.schemas.Store(toolName, noValidator)
+			return nil
+		}
+
+		schemaJSON, err := js.MarshalJSON()
+		if err != nil {
+			m.schemas.Store(toolName, noValidator)
+			return nil
+		}
+
+		err = json.Unmarshal(schemaJSON, &schemaMap)
+		if err != nil {
+			m.schemas.Store(toolName, noValidator)
+			return nil
+		}
 	}
 
 	// Compile schema
 	compiler := jsonschema.NewCompiler()
-	schemaJSON, err := json.Marshal(js)
-	if err != nil {
-		m.schemas.Store(toolName, noValidator)
-		return nil
-	}
-
-	compiledSchema, err := compiler.Compile(string(schemaJSON))
+	compiler.AddResource(toolName+"schema.json", schemaMap)
+	compiledSchema, err := compiler.Compile(toolName + "schema.json")
 	if err != nil {
 		m.schemas.Store(toolName, noValidator)
 		return nil

@@ -180,6 +180,7 @@ func newDeepAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 	// Instruction 占位符替换
 	middlewares := make([]adk.ChatModelAgentMiddleware, 0, len(cfg.Middlewares)+1)
 	middlewares = append(middlewares, newInstructionReplacerMiddleware())
+	middlewares = append(middlewares, agentMiddlewares(ctx, cfg, false)...)
 	if len(cfg.Middlewares) > 0 {
 		middlewares = append(middlewares, cfg.Middlewares...)
 	}
