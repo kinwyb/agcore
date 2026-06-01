@@ -17,6 +17,13 @@ import (
 	"github.com/eino-contrib/jsonschema"
 )
 
+// getEmptyParameters 获取一个空参数
+func getEmptyParameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+	}
+}
+
 // Registry 工具注册表
 type Registry struct {
 	tools           map[string]types.Tool

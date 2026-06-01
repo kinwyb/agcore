@@ -1,6 +1,10 @@
 package bus
 
 import (
+	"encoding/base64"
+	"fmt"
+	"strings"
+
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -81,17 +85,35 @@ func convertMediaToMessagePart(m Media) schema.MessageInputPart {
 			Extra: m.Metadata,
 		}
 	case schema.ChatMessagePartTypeFileURL:
-		return schema.MessageInputPart{
-			Type: schema.ChatMessagePartTypeFileURL,
-			File: &schema.MessageInputFile{
-				MessagePartCommon: schema.MessagePartCommon{
-					URL:        strPtrIfNotEmpty(m.URL),
-					Base64Data: strPtrIfNotEmpty(m.Base64),
-					MIMEType:   m.MimeType,
-				},
-			},
-			Extra: m.Metadata,
+		fileData := strPtrIfNotEmpty(m.Base64)
+		if fileData != nil {
+			data, _ := base64.StdEncoding.DecodeString(*fileData)
+			if len(data) > 0 {
+				return schema.MessageInputPart{
+					Type: schema.ChatMessagePartTypeText,
+					Text: fmt.Sprintf("文件[%s]内容如下\n%s", m.Metadata["filename"], string(data)),
+				}
+			}
 		}
+		filetmp := strPtrIfNotEmpty(m.URL)
+		if filetmp == nil {
+			return schema.MessageInputPart{}
+		}
+		return schema.MessageInputPart{
+			Type: schema.ChatMessagePartTypeText,
+			Text: fmt.Sprintf("收到文件[%s]存放在[%s]中,如有需要按路径读取文件", m.Metadata["filename"], *filetmp),
+		}
+		//return schema.MessageInputPart{
+		//	Type: schema.ChatMessagePartTypeFileURL,
+		//	File: &schema.MessageInputFile{
+		//		MessagePartCommon: schema.MessagePartCommon{
+		//			URL:        strPtrIfNotEmpty(m.URL),
+		//			Base64Data: strPtrIfNotEmpty(m.Base64),
+		//			MIMEType:   m.MimeType,
+		//		},
+		//	},
+		//	Extra: m.Metadata,
+		//}
 	default:
 		return schema.MessageInputPart{}
 	}
@@ -99,6 +121,7 @@ func convertMediaToMessagePart(m Media) schema.MessageInputPart {
 
 // strPtrIfNotEmpty returns a pointer to the string if it's not empty, otherwise nil
 func strPtrIfNotEmpty(s string) *string {
+	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil
 	}
@@ -138,7 +161,6 @@ func buildUserMessage(content string, media []Media) *schema.Message {
 
 	return &schema.Message{
 		Role:                  schema.User,
-		Content:               content,
 		UserInputMultiContent: parts,
 	}
 }
