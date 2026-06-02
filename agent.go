@@ -39,6 +39,12 @@ type AgentConfig struct {
 	SkillDirs    []string                       // 支持多个SKILL目录
 	MCPConfigs   []tools.MCPConfig              // MCP配置信息
 	MCPLoader    *tools.MCPLoader               // MCP 工具加载器（用于可用性检查）
+	// ModelRetryConfig configures retry behavior for the ChatModel.
+	// Set via BuildModelRetryConfig or nil to disable retries.
+	ModelRetryConfig *adk.ModelRetryConfig
+	// ModelFailoverConfig configures failover behavior for the ChatModel.
+	// When the primary model fails (after retries), switches to fallback models.
+	ModelFailoverConfig *adk.ModelFailoverConfig
 }
 
 type Agent struct {
@@ -132,13 +138,14 @@ func buildAgent(ctx context.Context, ag adk.Agent, cfg *AgentConfig) (*Agent, er
 // newChatModelAgent 创建基础的 ChatModelAgent（ReAct 模式）
 func newChatModelAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 	agentConfig := &adk.ChatModelAgentConfig{
-		Name:             cfg.Name,
-		Description:      cfg.Description,
-		Instruction:      cfg.Instruction,
-		Model:            cfg.LLM,
-		MaxIterations:    cfg.MaxIteration,
-		Handlers:         agentMiddlewares(ctx, cfg, true),
-		ModelRetryConfig: buildModelRetryConfig(),
+		Name:                cfg.Name,
+		Description:         cfg.Description,
+		Instruction:         cfg.Instruction,
+		Model:               cfg.LLM,
+		MaxIterations:       cfg.MaxIteration,
+		Handlers:            agentMiddlewares(ctx, cfg, true),
+		ModelRetryConfig:    cfg.ModelRetryConfig,
+		ModelFailoverConfig: cfg.ModelFailoverConfig,
 	}
 
 	if cfg.ToolReg.ToolCount() > 0 {
@@ -196,7 +203,8 @@ func newDeepAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 		WithoutWriteTodos:      false,
 		WithoutGeneralSubAgent: false,
 		Handlers:               middlewares,
-		ModelRetryConfig:       buildModelRetryConfig(),
+		ModelRetryConfig:       cfg.ModelRetryConfig,
+		ModelFailoverConfig:    cfg.ModelFailoverConfig,
 	}
 
 	if cfg.ToolReg.ToolCount() > 0 {
@@ -311,13 +319,14 @@ func newSupervisorAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 
 	// 创建 supervisor agent（使用 ChatModelAgent 作为 supervisor）
 	supervisorConfig := &adk.ChatModelAgentConfig{
-		Name:             cfg.Name,
-		Description:      cfg.Description,
-		Instruction:      systemPrompt,
-		Model:            cfg.LLM,
-		MaxIterations:    cfg.MaxIteration,
-		Handlers:         agentMiddlewares(ctx, cfg, true),
-		ModelRetryConfig: buildModelRetryConfig(),
+		Name:                cfg.Name,
+		Description:         cfg.Description,
+		Instruction:         systemPrompt,
+		Model:               cfg.LLM,
+		MaxIterations:       cfg.MaxIteration,
+		Handlers:            agentMiddlewares(ctx, cfg, true),
+		ModelRetryConfig:    cfg.ModelRetryConfig,
+		ModelFailoverConfig: cfg.ModelFailoverConfig,
 	}
 
 	supervisorAgent, err := adk.NewChatModelAgent(ctx, supervisorConfig)
@@ -385,28 +394,44 @@ func buildBuiltinAgentMiddlewares(ctx context.Context) ([]adk.ChatModelAgentMidd
 	return ms, nil
 }
 
-// buildModelRetryConfig 重试配置
-func buildModelRetryConfig() *adk.ModelRetryConfig {
-	return nil
-	//return &adk.ModelRetryConfig{
-	//	MaxRetries: 5,
-	//	//ShouldRetry: func(ctx context.Context, retryCtx *adk.RetryContext) *adk.RetryDecision {
-	//	//	return &adk.RetryDecision{
-	//	//		Retry:                        false,
-	//	//		RewriteError:                 nil,
-	//	//		ModifiedInputMessages:        nil,
-	//	//		PersistModifiedInputMessages: false,
-	//	//		AdditionalOptions:            nil,
-	//	//		Backoff:                      0,
-	//	//	}
-	//	//},
-	//	IsRetryAble: func(_ context.Context, err error) bool {
-	//		// 429 限流错误可重试
-	//		return strings.Contains(err.Error(), "429") ||
-	//			strings.Contains(err.Error(), "Too Many Requests") ||
-	//			strings.Contains(err.Error(), "qpm limit")
-	//	},
-	//}
+// BuildModelRetryConfig 构建默认的重试配置。
+// 仅在 429 限流和 5xx 服务器错误时重试，使用 eino 默认的指数退避策略。
+func BuildModelRetryConfig(maxRetries int) *adk.ModelRetryConfig {
+	return &adk.ModelRetryConfig{
+		MaxRetries: maxRetries,
+		ShouldRetry: func(ctx context.Context, retryCtx *adk.RetryContext) *adk.RetryDecision {
+			if retryCtx.Err == nil {
+				// 没有错误，接受结果
+				return &adk.RetryDecision{Retry: false}
+			}
+			errStr := retryCtx.Err.Error()
+			// 限流错误
+			if strings.Contains(errStr, "429") ||
+				strings.Contains(errStr, "Too Many Requests") ||
+				strings.Contains(errStr, "qpm limit") ||
+				strings.Contains(errStr, "rate limit") {
+				return &adk.RetryDecision{Retry: true}
+			}
+			// 5xx 服务器错误
+			if strings.Contains(errStr, "500") ||
+				strings.Contains(errStr, "502") ||
+				strings.Contains(errStr, "503") ||
+				strings.Contains(errStr, "504") ||
+				strings.Contains(errStr, "internal server error") ||
+				strings.Contains(errStr, "bad gateway") ||
+				strings.Contains(errStr, "service unavailable") {
+				return &adk.RetryDecision{Retry: true}
+			}
+			// Context 取消不可重试
+			if errors.Is(retryCtx.Err, context.Canceled) ||
+				errors.Is(retryCtx.Err, context.DeadlineExceeded) {
+				return &adk.RetryDecision{Retry: false}
+			}
+			// 未知错误不重试
+			return &adk.RetryDecision{Retry: false}
+		},
+		// 使用 eino 默认的指数退避：100ms 基础，最大 10s，带随机抖动
+	}
 }
 
 // buildDefaultInstruction 默认的提示词信息
