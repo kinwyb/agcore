@@ -98,9 +98,21 @@ func NewAgent(ctx context.Context, cfg *AgentConfig) (*Agent, error) {
 	}
 }
 
+// defaultToolInterceptor is the global tool interceptor middleware.
+// Use AddToolInterceptorHook to register hooks.
+var defaultToolInterceptor = NewToolInterceptor()
+
+// AddToolInterceptorHook registers a hook to the global tool interceptor.
+// Hooks execute in registration order for Before, reverse order for After.
+// This is safe to call from init() or any goroutine.
+func AddToolInterceptorHook(hook ToolHook) {
+	defaultToolInterceptor.AddHook(hook)
+}
+
 // agentMiddlewares agent的默认中间件
 func agentMiddlewares(ctx context.Context, cfg *AgentConfig, fileMW bool) []adk.ChatModelAgentMiddleware {
 	mds := append([]adk.ChatModelAgentMiddleware{
+		defaultToolInterceptor, // 最外层，拦截所有工具调用
 		tools.NewToolApproveMiddleware(cfg.ToolReg),
 		NewToolValidateMiddleware(),
 		NewMCPAvailMiddleware(cfg.MCPLoader),
