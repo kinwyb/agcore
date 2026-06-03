@@ -563,15 +563,17 @@ func (a *Agent) Prompt(ctx context.Context, state *State) error {
 	}
 	a.sessionMap[state.SessionID] = state
 	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		delete(a.sessionMap, state.SessionID)
+		a.mu.Unlock()
+	}()
 	// Run orchestrator
 	err := a.loop.Run(ctx, state)
 	if err != nil {
 		slog.Error("Agent execution failed", "error", err)
 		return err
 	}
-	a.mu.Lock()
-	delete(a.sessionMap, state.SessionID)
-	a.mu.Unlock()
 	return nil
 }
 

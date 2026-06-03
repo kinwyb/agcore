@@ -214,14 +214,28 @@ func (ti *ToolInterceptor) WrapInvokableToolCall(
 			}
 		}
 
-		// Execute tool
-		callCtx := ctx
-		if timeout := ti.toolTimeoutFor(tCtx.Name); timeout > 0 {
-			var cancel context.CancelFunc
-			callCtx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
-		result, execErr := endpoint(callCtx, args, opts...)
+		// Execute tool: context.WithTimeout cancels underlying operation (e.g. kills child process),
+		// goroutine select returns immediately on timeout even if tool ignores context.
+		result, execErr := func() (string, error) {
+			if timeout := ti.toolTimeoutFor(tCtx.Name); timeout > 0 {
+				callCtx, cancel := context.WithTimeout(ctx, timeout)
+				defer cancel()
+				done := make(chan struct{})
+				var r string
+				var e error
+				go func() {
+					r, e = endpoint(callCtx, args, opts...)
+					close(done)
+				}()
+				select {
+				case <-done:
+					return r, e
+				case <-time.After(timeout):
+					return "", fmt.Errorf("tool execution timed out after %v", timeout)
+				}
+			}
+			return endpoint(ctx, args, opts...)
+		}()
 
 		// Run After hooks in reverse registration order
 		for i := len(ti.hooks) - 1; i >= 0; i-- {
@@ -288,18 +302,22 @@ func (ti *ToolInterceptor) WrapStreamableToolCall(
 			}
 		}
 
-		// Execute tool
-		callCtx := ctx
-		if timeout := ti.toolTimeoutFor(tCtx.Name); timeout > 0 {
-			var cancel context.CancelFunc
+		// Execute tool: wrap context with timeout — underlying operations (e.g. exec.CommandContext)
+		// will be cancelled when timeout fires. Stream collection goroutine also respects this context.
+		timeout := ti.toolTimeoutFor(tCtx.Name)
+		var callCtx = ctx
+		var cancel context.CancelFunc
+		if timeout > 0 {
 			callCtx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
 		}
 		result, execErr := endpoint(callCtx, args, opts...)
-		if execErr != nil {
-			return ti.wrapStreamResult(ctx, tCtx, args, nil, execErr), nil
+		if cancel != nil {
+			defer cancel()
 		}
-		return ti.wrapStreamResult(ctx, tCtx, args, result, nil), nil
+		if execErr != nil {
+			return ti.wrapStreamResult(callCtx, tCtx, args, nil, execErr, timeout), nil
+		}
+		return ti.wrapStreamResult(callCtx, tCtx, args, result, nil, timeout), nil
 	}, nil
 }
 
@@ -310,6 +328,7 @@ func (ti *ToolInterceptor) wrapStreamResult(
 	args string,
 	input *schema.StreamReader[string],
 	execErr error,
+	timeout time.Duration,
 ) *schema.StreamReader[string] {
 	outR, outW := schema.Pipe[string](64)
 
@@ -345,40 +364,63 @@ func (ti *ToolInterceptor) wrapStreamResult(
 
 		defer input.Close()
 
-		// Collect all chunks
+		// Collect all chunks; ctx carries timeout so Recv unblocks when deadline fires.
+		// Sub-goroutine + ctx.Done ensures we return even if stream hangs.
+		type recvResult struct {
+			chunks []string
+			err    error
+		}
+		collected := make(chan recvResult, 1)
+		go func() {
+			var chunks []string
+			for {
+				chunk, err := input.Recv()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					collected <- recvResult{chunks: chunks, err: err}
+					return
+				}
+				chunks = append(chunks, chunk)
+			}
+			collected <- recvResult{chunks: chunks, err: nil}
+		}()
+
 		var chunks []string
-		for {
-			chunk, err := input.Recv()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				// Run After hooks with error
-				result := ""
-				for i := len(ti.hooks) - 1; i >= 0; i-- {
-					hook := ti.hooks[i]
-					in := &AfterCallInput{
-						ToolName:  tCtx.Name,
-						CallID:    tCtx.CallID,
-						Arguments: args,
-						Result:    "",
-						Err:       err,
-					}
-					res, hookErr := hook.After(ctx, in)
-					if hookErr != nil {
-						_ = outW.Send(fmt.Sprintf("[hook error] hook '%s' (after): %v", hook.Name(), hookErr), nil)
-						return
-					}
-					if res != nil && res.Result != "" {
-						result = res.Result
-					}
+		var recvErr error
+		select {
+		case res := <-collected:
+			chunks, recvErr = res.chunks, res.err
+		case <-ctx.Done():
+			recvErr = fmt.Errorf("tool stream timed out after %v: %w", timeout, ctx.Err())
+		}
+
+		if recvErr != nil {
+			// Run After hooks with error
+			result := ""
+			for i := len(ti.hooks) - 1; i >= 0; i-- {
+				hook := ti.hooks[i]
+				in := &AfterCallInput{
+					ToolName:  tCtx.Name,
+					CallID:    tCtx.CallID,
+					Arguments: args,
+					Result:    "",
+					Err:       recvErr,
 				}
-				if result != "" {
-					_ = outW.Send(result, nil)
+				res, hookErr := hook.After(ctx, in)
+				if hookErr != nil {
+					_ = outW.Send(fmt.Sprintf("[hook error] hook '%s' (after): %v", hook.Name(), hookErr), nil)
+					return
 				}
-				return
+				if res != nil && res.Result != "" {
+					result = res.Result
+				}
 			}
-			chunks = append(chunks, chunk)
+			if result != "" {
+				_ = outW.Send(result, nil)
+			}
+			return
 		}
 
 		fullResult := ""
@@ -449,14 +491,28 @@ func (ti *ToolInterceptor) WrapEnhancedInvokableToolCall(
 			}
 		}
 
-		// Execute tool
-		callCtx := ctx
-		if timeout := ti.toolTimeoutFor(tCtx.Name); timeout > 0 {
-			var cancel context.CancelFunc
-			callCtx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
-		result, execErr := endpoint(callCtx, &schema.ToolArgument{Text: args}, opts...)
+		// Execute tool: context.WithTimeout cancels underlying operation,
+		// goroutine select returns immediately on timeout.
+		result, execErr := func() (*schema.ToolResult, error) {
+			if timeout := ti.toolTimeoutFor(tCtx.Name); timeout > 0 {
+				callCtx, cancel := context.WithTimeout(ctx, timeout)
+				defer cancel()
+				done := make(chan struct{})
+				var r *schema.ToolResult
+				var e error
+				go func() {
+					r, e = endpoint(callCtx, &schema.ToolArgument{Text: args}, opts...)
+					close(done)
+				}()
+				select {
+				case <-done:
+					return r, e
+				case <-time.After(timeout):
+					return nil, fmt.Errorf("tool execution timed out after %v", timeout)
+				}
+			}
+			return endpoint(ctx, &schema.ToolArgument{Text: args}, opts...)
+		}()
 
 		// Run After hooks
 		resultText := extractToolResultText(result)
@@ -524,19 +580,21 @@ func (ti *ToolInterceptor) WrapEnhancedStreamableToolCall(
 			}
 		}
 
-		// Execute tool
-		callCtx := ctx
-		if timeout := ti.toolTimeoutFor(tCtx.Name); timeout > 0 {
-			var cancel context.CancelFunc
+		// Execute tool: wrap context with timeout for stream collection.
+		timeout := ti.toolTimeoutFor(tCtx.Name)
+		var callCtx = ctx
+		var cancel context.CancelFunc
+		if timeout > 0 {
 			callCtx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
 		}
 		result, execErr := endpoint(callCtx, &schema.ToolArgument{Text: args}, opts...)
-
-		if execErr != nil {
-			return ti.wrapEnhancedStreamResult(ctx, tCtx, args, nil, execErr), nil
+		if cancel != nil {
+			defer cancel()
 		}
-		return ti.wrapEnhancedStreamResult(ctx, tCtx, args, result, nil), nil
+		if execErr != nil {
+			return ti.wrapEnhancedStreamResult(callCtx, tCtx, args, nil, execErr, timeout), nil
+		}
+		return ti.wrapEnhancedStreamResult(callCtx, tCtx, args, result, nil, timeout), nil
 	}, nil
 }
 
@@ -547,6 +605,7 @@ func (ti *ToolInterceptor) wrapEnhancedStreamResult(
 	args string,
 	input *schema.StreamReader[*schema.ToolResult],
 	execErr error,
+	timeout time.Duration,
 ) *schema.StreamReader[*schema.ToolResult] {
 	outR, outW := schema.Pipe[*schema.ToolResult](64)
 
@@ -581,38 +640,61 @@ func (ti *ToolInterceptor) wrapEnhancedStreamResult(
 
 		defer input.Close()
 
+		// Collect all results with timeout protection
+		type recvResult struct {
+			results []*schema.ToolResult
+			err     error
+		}
+		collected := make(chan recvResult, 1)
+		go func() {
+			var results []*schema.ToolResult
+			for {
+				chunk, err := input.Recv()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					collected <- recvResult{results: results, err: err}
+					return
+				}
+				results = append(results, chunk)
+			}
+			collected <- recvResult{results: results, err: nil}
+		}()
+
 		var results []*schema.ToolResult
-		for {
-			chunk, err := input.Recv()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				resultText := ""
-				for i := len(ti.hooks) - 1; i >= 0; i-- {
-					hook := ti.hooks[i]
-					in := &AfterCallInput{
-						ToolName:  tCtx.Name,
-						CallID:    tCtx.CallID,
-						Arguments: args,
-						Result:    "",
-						Err:       err,
-					}
-					res, hookErr := hook.After(ctx, in)
-					if hookErr != nil {
-						_ = outW.Send(textToolResult(fmt.Sprintf("[hook error] hook '%s' (after): %v", hook.Name(), hookErr)), nil)
-						return
-					}
-					if res != nil && res.Result != "" {
-						resultText = res.Result
-					}
+		var recvErr error
+		select {
+		case res := <-collected:
+			results, recvErr = res.results, res.err
+		case <-ctx.Done():
+			recvErr = fmt.Errorf("tool stream timed out after %v: %w", timeout, ctx.Err())
+		}
+
+		if recvErr != nil {
+			resultText := ""
+			for i := len(ti.hooks) - 1; i >= 0; i-- {
+				hook := ti.hooks[i]
+				in := &AfterCallInput{
+					ToolName:  tCtx.Name,
+					CallID:    tCtx.CallID,
+					Arguments: args,
+					Result:    "",
+					Err:       recvErr,
 				}
-				if resultText != "" {
-					_ = outW.Send(textToolResult(resultText), nil)
+				res, hookErr := hook.After(ctx, in)
+				if hookErr != nil {
+					_ = outW.Send(textToolResult(fmt.Sprintf("[hook error] hook '%s' (after): %v", hook.Name(), hookErr)), nil)
+					return
 				}
-				return
+				if res != nil && res.Result != "" {
+					resultText = res.Result
+				}
 			}
-			results = append(results, chunk)
+			if resultText != "" {
+				_ = outW.Send(textToolResult(resultText), nil)
+			}
+			return
 		}
 
 		// Collect full text from results

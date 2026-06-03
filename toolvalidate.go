@@ -140,7 +140,11 @@ func (m *toolValidateMiddleware) getValidator(ctx context.Context, toolName stri
 	var schemaMap = map[string]any{}
 
 	if tP, ok := t.(toolParameters); ok {
-		schemaMap = tP.Parameters()
+		params := tP.Parameters()
+		paramJson, _ := json.Marshal(params)
+		if err := json.Unmarshal(paramJson, &schemaMap); err != nil {
+			return nil
+		}
 	} else {
 		// Get tool info
 		info, err := t.Info(ctx)
@@ -177,7 +181,7 @@ func (m *toolValidateMiddleware) getValidator(ctx context.Context, toolName stri
 	compiler := jsonschema.NewCompiler()
 	compiler.AddResource(toolName+"schema.json", schemaMap)
 	compiledSchema, err := compiler.Compile(toolName + "schema.json")
-	if err != nil {
+	if compiledSchema == nil || err != nil {
 		m.schemas.Store(toolName, noValidator)
 		return nil
 	}
