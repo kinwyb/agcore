@@ -132,7 +132,6 @@ func buildAgent(ctx context.Context, ag adk.Agent, cfg *AgentConfig) (*Agent, er
 		agent:      ag,
 		streaming:  cfg.Streaming,
 		checkStore: cfg.CheckStore,
-		llm:        cfg.LLM,
 	})
 	if err != nil {
 		return nil, err
@@ -593,15 +592,15 @@ func (a *Agent) Cancel(sessionID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if state, ok := a.sessionMap[sessionID]; ok {
+		if state.cancel != nil {
+			state.cancel()
+		}
 		if state.agentCancel != nil { //取消agent执行
 			handle, _ := state.agentCancel(
 				adk.WithAgentCancelMode(adk.CancelAfterChatModel|adk.CancelAfterToolCalls),
 				adk.WithAgentCancelTimeout(5*time.Second),
 			)
 			_ = handle.Wait()
-		}
-		if state.cancel != nil {
-			state.cancel()
 		}
 		delete(a.sessionMap, sessionID)
 	}

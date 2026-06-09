@@ -13,7 +13,6 @@ import (
 	"github.com/kinwyb/agcore/types"
 
 	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 )
@@ -22,12 +21,10 @@ type looperConfig struct {
 	agent      adk.Agent
 	streaming  bool
 	checkStore adk.CheckPointStore
-	llm        model.BaseChatModel
 }
 
 type looper struct {
 	agent        adk.Agent
-	llm          model.BaseChatModel
 	runner       *adk.Runner
 	checkPointMu sync.Mutex
 	checkPoints  map[string]*types.InterruptCheckPoint // 按sessionID存储中断检查点
@@ -41,7 +38,6 @@ func NewLooper(ctx context.Context, cfg *looperConfig) (*looper, error) {
 	})
 	o := &looper{
 		agent:        cfg.agent,
-		llm:          cfg.llm,
 		runner:       runner,
 		checkPointMu: sync.Mutex{},
 		checkPoints:  make(map[string]*types.InterruptCheckPoint),
@@ -70,21 +66,9 @@ func (o *looper) Run(ctx context.Context, state *State) error {
 			return err
 		}
 		if errors.Is(err, adk.ErrExceedMaxIterations) {
-			if o.llm == nil {
-				return err
-			}
-			maxPropmt := fmt.Sprintf("[SYSTEM NOTICE: You have reached the maximum iteration limit. Please provide a final response to the user based on the previous tool results. Do not make any further tool calls.]")
-			messages := append(state.FullMessages(), schema.UserMessage(maxPropmt))
-			resultMsg, lerr := o.llm.Generate(ctx, messages)
-			if lerr != nil {
-				return fmt.Errorf("agent loop failed: %w", err)
-			}
-			if resultMsg != nil && resultMsg.Role == schema.Assistant {
-				state.NewMessage = append(state.NewMessage, resultMsg)
-			}
-		} else {
-			return fmt.Errorf("agent loop failed: %w", err)
+			return errors.New("agent运行已打最大允许的轮次本次任务中止,如需继续任务请输入继续")
 		}
+		return fmt.Errorf("agent loop failed: %w", err)
 	}
 
 	state.cancel()

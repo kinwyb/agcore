@@ -204,6 +204,8 @@ func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) 
 	if msg.Timestamp.IsZero() {
 		msg.Timestamp = time.Now()
 	}
+
+	//slog.Info("Push outbound", "msg.id", msg.ID, "msg.seq", msg.ChunkIndex)
 	return b.outbound.Push(ctx, msg)
 }
 
@@ -310,6 +312,7 @@ func (b *MessageBus) PublishEvent(ctx context.Context, event *Event) error {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now()
 	}
+	//slog.Info("Push event", "event.id", event.ID, "event.type", event.Type, "event.seq", event.Seq)
 	return b.chatEvents.Push(ctx, event)
 
 }
