@@ -592,15 +592,20 @@ func (a *Agent) Cancel(sessionID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if state, ok := a.sessionMap[sessionID]; ok {
+		slog.Info("Agent cancel", "sessionID", sessionID)
 		if state.cancel != nil {
 			state.cancel()
 		}
 		if state.agentCancel != nil { //取消agent执行
-			handle, _ := state.agentCancel(
+			handle, ce := state.agentCancel(
 				adk.WithAgentCancelMode(adk.CancelAfterChatModel|adk.CancelAfterToolCalls),
 				adk.WithAgentCancelTimeout(5*time.Second),
 			)
-			_ = handle.Wait()
+			slog.Info("Agent cancel", "state", ce)
+			err := handle.Wait()
+			if err != nil {
+				slog.Error("Agent cancel failed", "error", err)
+			}
 		}
 		delete(a.sessionMap, sessionID)
 	}

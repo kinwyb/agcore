@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"slices"
 	"sync"
 
@@ -47,16 +46,16 @@ func (r *Registry) initDefaultTool() {
 	// 获取当前时间
 	r.Register(NewGetCurrentTimeTool())
 	// 注册 Python 工具（Docker 沙盒执行）
-	if _, err := exec.LookPath("docker"); err == nil {
-		pythonTool := NewPythonTool(30)
-		if err := r.Register(pythonTool, false); err != nil {
-			slog.Warn("Failed to register python tool", "error", err)
-		} else {
-			slog.Debug("Python tool registered")
-		}
-	} else {
-		slog.Debug("Docker not available, skipping python tool registration")
-	}
+	//if _, err := exec.LookPath("docker"); err == nil {
+	//	pythonTool := NewPythonTool(30)
+	//	if err := r.Register(pythonTool, false); err != nil {
+	//		slog.Warn("Failed to register python tool", "error", err)
+	//	} else {
+	//		slog.Debug("Python tool registered")
+	//	}
+	//} else {
+	//	slog.Debug("Docker not available, skipping python tool registration")
+	//}
 }
 
 // Register 注册工具

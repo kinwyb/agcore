@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -24,24 +24,35 @@ type PythonTool struct {
 	timeout        int
 	image          string
 	dockerfilePath string
+	workspace      string
+	outputPath     string
 }
 
 // NewPythonTool creates a Python execution tool running in Docker sandbox
-func NewPythonTool(timeoutSeconds int) *PythonTool {
+func NewPythonTool(timeoutSeconds int, workspace string, output string) *PythonTool {
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = pythonDefaultTimeout
+	}
+	if output == "" {
+		output = filepath.Join(workspace, "tmp")
 	}
 	return &PythonTool{
 		timeout:        timeoutSeconds,
 		image:          pythonDefaultImage,
 		dockerfilePath: findDockerfilePath(),
+		workspace:      workspace,
+		outputPath:     output,
 	}
 }
 
 // findDockerfilePath locates the sandbox Dockerfile relative to this source file
 func findDockerfilePath() string {
-	_, filename, _, _ := runtime.Caller(0)
-	dir := filepath.Dir(filename)
+	// 1. 获取当前正在执行的二进制文件的绝对路径
+	exePath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(exePath)
 	return filepath.Join(dir, "sandbox", "Dockerfile")
 }
 
@@ -56,19 +67,24 @@ func (t *PythonTool) Description() string {
 
 The code runs in a sandboxed container with:
 - Resource limits (512MB memory, 1 CPU)
+- Read-only Input: The input files are located in /workspace (which maps to the host's ` + t.workspace + `).
 - Auto-destruction after execution (--rm)
-- Read-only access to the workspace directory (mounted at /workspace:ro)
 
-## Parameters
-- **code** (required): Python code to execute
-- **working_directory** (optional): Subdirectory within workspace to use as working directory (relative to /workspace)
+### ⚠️ Critical File Output Rules
+Because the Docker container is ephemeral and **destroyed automatically immediately after execution**, any files saved to relative paths or default directories will be permanently lost.
+To persist and retrieve any generated files (e.g., CSVs, Images, JSON, TXT), you **MUST** save them directly into the /out directory using its absolute path.
 
-## Notes
-- Network access is enabled, so you can install third-party packages via pip (e.g., import os; os.system("pip install pandas")).
-- Pre-installed packages: pandas, numpy, matplotlib, openpyxl, scikit-learn, requests. No need to pip install these.
-- Each run is in a fresh container, so any extra installed packages don't persist between runs.
-- Output is limited to 10KB for both stdout and stderr.
-- Execution timeout is 30 seconds.`
+* ❌ **Incorrect:** df.to_csv("result.csv") or plt.savefig("chart.png") *(Files will be lost upon container destruction)*
+* ✅ **Correct:** df.to_csv("/out/result.csv") or plt.savefig("/out/chart.png") *(Files will be safely persisted)*
+
+> ℹ️ **Host Mapping Note:** The container's /out directory is mapped to the host machine's ` + t.outputPath + ` directory. Once the execution finishes, the output files you saved can be retrieved from the host at ` + t.outputPath + `.
+
+### Notes
+
+* Network access is enabled, so you can install third-party packages via pip if necessary (e.g., import os; os.system("pip install package_name")).
+* Pre-installed packages: pandas, numpy, matplotlib, openpyxl, scikit-learn, requests. No need to pip install these.
+* Output is limited to 10KB for both stdout and stderr.
+* Execution timeout is 30 seconds.`
 }
 
 // Parameters returns the JSON Schema for tool parameters
@@ -79,10 +95,6 @@ func (t *PythonTool) Parameters() map[string]interface{} {
 			"code": map[string]interface{}{
 				"type":        "string",
 				"description": "Python code to execute",
-			},
-			"working_directory": map[string]interface{}{
-				"type":        "string",
-				"description": "Subdirectory within workspace to use as working directory (relative path, defaults to /workspace)",
 			},
 		},
 		"required": []string{"code"},
@@ -123,10 +135,8 @@ func (t *PythonTool) Execute(ctx context.Context, params map[string]interface{})
 	}
 
 	// Build working directory
-	workDir := "/workspace"
-	if wd, ok := params["working_directory"].(string); ok && wd != "" {
-		workDir = "/workspace/" + strings.TrimPrefix(wd, "/")
-	}
+	workDir := t.workspace
+	outputPath := t.outputPath
 
 	// Build docker run command
 	args := []string{
@@ -136,8 +146,8 @@ func (t *PythonTool) Execute(ctx context.Context, params map[string]interface{})
 		"--memory=512m",
 		"--cpus=1",
 		"--tmpfs=/tmp:rw,noexec,nosuid,size=64m",
-		//"-v", t.workspace + ":/workspace:ro",
-		"-w", workDir,
+		"-v", workDir + ":/workspace:ro",
+		"-v", outputPath + ":/out:rw",
 		t.image,
 		"python3", // reads code from stdin
 	}
@@ -187,8 +197,12 @@ func (t *PythonTool) ensureImage(ctx context.Context) error {
 	}
 
 	// 2. Try to build from Dockerfile
-	if err := t.buildImage(ctx); err == nil {
-		return nil // build succeeded
+	if t.dockerfilePath != "" {
+		if err := t.buildImage(ctx); err == nil {
+			return nil // build succeeded
+		}
+	} else {
+		t.image = "python:3.10-slim"
 	}
 
 	// 3. Fallback: pull from registry
