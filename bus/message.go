@@ -68,6 +68,7 @@ type OutboundMessage struct {
 	ReasoningContent string                 `json:"reasoning_content"` // 思考/推理内容
 	IsStreaming      bool                   `json:"is_streaming"`      // 是否流式发送
 	IsThinking       bool                   `json:"is_thinking"`       // 是否为思考内容（流式时使用）
+	IsEnd            bool                   `json:"is_end"`            // 是否是消息结束 (可以区分大模型发送过来的多条消息内容)
 	IsFinal          bool                   `json:"is_final"`          // 是否最终消息（流式时使用）
 	ChunkIndex       int                    `json:"chunk_index"`       // chunk序号（流式时使用）
 	Media            []Media                `json:"media"`             // 媒体文件
@@ -75,6 +76,18 @@ type OutboundMessage struct {
 	Error            string                 `json:"error,omitempty"`   // 错误信息
 	Metadata         map[string]interface{} `json:"metadata"`          // 元数据
 	Timestamp        time.Time              `json:"timestamp"`
+}
+
+// ReqID 返回发送的消息ID
+func (m *OutboundMessage) ReqID() string {
+	// 从metadata获取req_id
+	reqID := m.ReplyTo
+	if m.Metadata != nil {
+		if id, ok := m.Metadata["req_id"].(string); ok && id != "" {
+			reqID = id
+		}
+	}
+	return reqID
 }
 
 // EventType 事件类型

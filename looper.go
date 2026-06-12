@@ -179,22 +179,29 @@ func (o *looper) processEvents(state *State, events *adk.AsyncIterator[*adk.Agen
 			if err != nil {
 				return err
 			}
-
+			if msg != nil {
+				if msg.Extra == nil {
+					msg.Extra = make(map[string]interface{})
+				}
+				if tv, hasT := msg.Extra[MessageExtraTimestampKey]; !hasT || tv == "" {
+					msg.Extra[MessageExtraTimestampKey] = time.Now().Format(time.RFC3339)
+				}
+				if iv, hasI := msg.Extra[MessageExtraReqIDKey]; !hasI || iv == "" {
+					msg.Extra[MessageExtraReqIDKey] = msgID
+				}
+			}
 			if mv.Role == schema.Tool {
 				state.EventHandler(NewEvent(EventToolEnd).WithMessage(msg))
 			} else if mv.Role == schema.Assistant && len(msg.ToolCalls) > 0 {
+				if msg.Content != "" { // 工具使用过程中有内容输出也按完整数据返回
+					toolMsg := schema.AssistantMessage(msg.Content, nil)
+					toolMsg.ReasoningContent = msg.ReasoningContent
+					toolMsg.ResponseMeta = msg.ResponseMeta
+					state.EventHandler(NewEvent(EventMessageEnd).WithMessage(toolMsg))
+				}
 				state.EventHandler(NewEvent(EventToolStart).WithMessage(msg))
 			} else {
 				state.EventHandler(NewEvent(EventMessageEnd).WithMessage(msg))
-			}
-			if msg.Extra == nil {
-				msg.Extra = make(map[string]interface{})
-			}
-			if tv, hasT := msg.Extra[MessageExtraTimestampKey]; !hasT || tv == "" {
-				msg.Extra[MessageExtraTimestampKey] = time.Now().Format(time.RFC3339)
-			}
-			if iv, hasI := msg.Extra[MessageExtraReqIDKey]; !hasI || iv == "" {
-				msg.Extra[MessageExtraReqIDKey] = msgID
 			}
 			state.NewMessage = append(state.NewMessage, msg)
 		}
