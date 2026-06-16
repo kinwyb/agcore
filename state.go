@@ -24,6 +24,7 @@ const (
 	EventToolStart     EventType = "tool_start"
 	EventToolEnd       EventType = "tool_end"
 	EventInterrupt     EventType = "interrupt"
+	EventMaxIterations EventType = "max_iterations" // agent 达到最大迭代次数，等待插件决策
 )
 
 type Event struct {
@@ -62,16 +63,18 @@ func defaultEventCallback(event *Event) {
 
 // State 请求的状态信息
 type State struct {
-	ctx            context.Context     //上下文
-	cancel         context.CancelFunc  //取消函数
-	agentCancel    adk.AgentCancelFunc //agent取消
-	SessionID      string              `json:"session_id"`      // 会话记录ID
-	ReqID          string              `json:"req_id"`          // 输入消息ID
-	Input          []adk.Message       `json:"input"`           // 输入消息
-	HistoryMessage []adk.Message       `json:"history_message"` // 历史消息
-	NewMessage     []adk.Message       `json:"new_message"`     // 新消息
-	Session        map[string]any      `json:"session"`         // session值
-	EventHandler   EventCallback       `json:"-"`               // 消息事件处理
+	ctx                  context.Context      //上下文
+	cancel               context.CancelFunc   //取消函数
+	agentCancel          adk.AgentCancelFunc  //agent取消
+	SessionID            string               `json:"session_id"`      // 会话记录ID
+	ReqID                string               `json:"req_id"`          // 输入消息ID
+	Input                []adk.Message        `json:"input"`           // 输入消息
+	HistoryMessage       []adk.Message        `json:"history_message"` // 历史消息
+	NewMessage           []adk.Message        `json:"new_message"`     // 新消息
+	Session              map[string]any       `json:"session"`         // session值
+	EventHandler         EventCallback        `json:"-"`               // 消息事件处理
+	MaxIterationsHandler MaxIterationsHandler `json:"-"`               // 达到最大迭代次数时的插件，nil 表示按默认终止
+	MaxIterationsRetry   int                  `json:"-"`               // 允许续跑的最大次数，<=0 表示不续跑
 }
 
 // FullMessages 获取state完整消息，包含：历史消息，输入消息，新消息

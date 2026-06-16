@@ -55,8 +55,19 @@ func (o *looper) Run(ctx context.Context, state *State) error {
 		state.EventHandler = defaultEventCallback
 	}
 
-	// Main loop
-	err := o.runLoop(state)
+	// Main loop with optional max-iterations continuation
+	var err error
+	for {
+		err = o.runLoop(state)
+		if err == nil || !errors.Is(err, adk.ErrExceedMaxIterations) {
+			break
+		}
+		if !o.shouldContinueAfterMax(state) {
+			break
+		}
+		// 插件决定续跑：保留 NewMessage / Input，下一轮 runLoop 会用 FullMessages() 重发
+		o.bumpRetryCount(state)
+	}
 
 	if err == nil && len(state.NewMessage) < 1 {
 		return fmt.Errorf("agent loop failed: result msg empty")
@@ -66,7 +77,7 @@ func (o *looper) Run(ctx context.Context, state *State) error {
 			return err
 		}
 		if errors.Is(err, adk.ErrExceedMaxIterations) {
-			return errors.New("agent运行已打最大允许的轮次本次任务中止,如需继续任务请输入继续")
+			return errors.New("agent运行已达最大允许的轮次本次任务中止,如需继续任务请输入继续")
 		}
 		return fmt.Errorf("agent loop failed: %w", err)
 	}
@@ -74,6 +85,66 @@ func (o *looper) Run(ctx context.Context, state *State) error {
 	state.cancel()
 
 	return nil
+}
+
+// shouldContinueAfterMax 询问插件是否续跑。返回 true 表示续跑，false 走默认终止。
+func (o *looper) shouldContinueAfterMax(state *State) bool {
+	handler := state.MaxIterationsHandler
+	if handler == nil {
+		return false
+	}
+
+	maxRetry := state.MaxIterationsRetry
+	if maxRetry <= 0 {
+		return false
+	}
+	current := getRetryCount(state)
+	if current >= maxRetry {
+		slog.Warn("MaxIterationsHandler retry limit reached",
+			"sessionID", state.SessionID, "retry", current, "limit", maxRetry)
+		return false
+	}
+
+	// 通知外部进入决策
+	state.EventHandler(NewEvent(EventMaxIterations).WithMetadata(map[string]any{
+		"retry":      current,
+		"retryLimit": maxRetry,
+		"phase":      "decide",
+	}))
+
+	cont, err := handler(state.ctx, state)
+	if err != nil {
+		slog.Error("MaxIterationsHandler error", "sessionID", state.SessionID, "error", err)
+		return false
+	}
+	state.EventHandler(NewEvent(EventMaxIterations).WithMetadata(map[string]any{
+		"retry":      current,
+		"retryLimit": maxRetry,
+		"phase":      "decided",
+		"continue":   cont,
+	}))
+	return cont
+}
+
+func getRetryCount(state *State) int {
+	if state.Session == nil {
+		return 0
+	}
+	v, ok := state.Session[MaxIterationsRetryKey]
+	if !ok {
+		return 0
+	}
+	if n, ok := v.(int); ok {
+		return n
+	}
+	return 0
+}
+
+func (o *looper) bumpRetryCount(state *State) {
+	if state.Session == nil {
+		state.Session = make(map[string]any)
+	}
+	state.Session[MaxIterationsRetryKey] = getRetryCount(state) + 1
 }
 
 func (o *looper) runLoop(state *State) error {
@@ -90,7 +161,7 @@ func (o *looper) runLoop(state *State) error {
 
 	opts = append(opts, adk.WithSessionValues(sessionValue))
 
-	messages := append(state.HistoryMessage, state.Input...)
+	messages := state.FullMessages()
 
 	cancelOpt, cancelFunc := adk.WithCancel()
 
